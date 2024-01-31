@@ -70,7 +70,7 @@ int main(int argc, char * argv[])
     // Creating and showing a window.
     xcb_window_t window = xcb_generate_id(connection);
     const unsigned int window_mask = XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK;
-    const unsigned int window_values[] = {screen->white_pixel, XCB_EVENT_MASK_EXPOSURE};
+    const unsigned int window_values[] = {screen->white_pixel, XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_STRUCTURE_NOTIFY};
     xcb_create_window(connection, XCB_COPY_FROM_PARENT, window, screen->root, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, 0, XCB_WINDOW_CLASS_INPUT_OUTPUT, screen->root_visual, window_mask, window_values);
 
     // Create a standard ICCCM struct for hints that suggest to the window manager the correct dimensions and placement.
@@ -90,25 +90,51 @@ int main(int argc, char * argv[])
 
     // Drawing graphics in a window requires a graphics context 
     xcb_gcontext_t graphics_context = xcb_generate_id(connection);
-    const unsigned int graphics_context_mask = XCB_GC_FOREGROUND | XCB_GC_GRAPHICS_EXPOSURES;
-    const unsigned int graphics_context_values[] = {screen->black_pixel, 0};
+    const unsigned int graphics_context_mask = XCB_GC_FOREGROUND;
+    const unsigned int graphics_context_values[] = {screen->black_pixel};
     xcb_create_gc(connection, graphics_context, window, graphics_context_mask, graphics_context_values);
 
     // Add some image data and write the image to the screen.
-    for (unsigned int j = 10; j < image->height - 10; j ++)
+    for (unsigned int j = 50; j < image->height - 50; j ++)
     {
-        for (unsigned int i = 10; i < image->width - 10; i ++)
+        for (unsigned int i = 50; i < image->width - 50; i ++)
         {
-            *(image->data + (image->stride * j) + (i * 4)) = 0xFF;
+            *(image->data + (image->stride * j) + (i * 4) + (1 * ((i > 200) && (j > 200))) + (1 * ((i < image->width - 200) && (j < image->height - 200)))) = 0xFF;
         }
     }
-    xcb_shm_put_image(connection, window, graphics_context, image->width, image->height, 0, 0, image->width, image->height, 0, 0, image->depth, image->format, 0, xcb_shm_segment, 0);
-    xcb_flush(connection);
+    
+    // I have no idea how or why the following works.
+    // It changes some sort or property such that an XCB_CLIENT_MESSAGE event is triggered when the window is closed.
+    // Some aspect of the content of the message can be checked against a "WM_DELETE_WINDOW" atom to see if the window
+    // manager has closed the window. If so we can gracefully quit out of the program.
+    xcb_intern_atom_cookie_t protocol_cookie = xcb_intern_atom(connection, 1, 12, "WM_PROTOCOLS");
+    xcb_intern_atom_reply_t * protocol_reply = xcb_intern_atom_reply(connection, protocol_cookie, NULL);
+    xcb_intern_atom_cookie_t close_cookie = xcb_intern_atom(connection, 0, 16, "WM_DELETE_WINDOW");
+    xcb_intern_atom_reply_t * close_reply = xcb_intern_atom_reply(connection, close_cookie, NULL);
+    xcb_change_property(connection, XCB_PROP_MODE_REPLACE, window, protocol_reply->atom, XCB_ATOM_ATOM, 32, 1, &(close_reply->atom));
 
-
-    while(1)
+    int loop = 1;
+    xcb_generic_event_t * event;
+    while (loop)
     {
+        event = xcb_wait_for_event(connection);
+        switch (event->response_type & 0x7F)
+        {
+            case XCB_EXPOSE:
+            xcb_shm_put_image(connection, window, graphics_context, image->width, image->height, 0, 0, image->width, image->height, 0, 0, image->depth, image->format, 0, xcb_shm_segment, 0);
+            xcb_flush(connection);
+            break;
 
+            case XCB_CLIENT_MESSAGE:
+            if (((xcb_client_message_event_t *)event)->data.data32[0] == close_reply->atom)
+            {
+                loop = 0;
+            }
+            break;
+
+            default:
+            break;
+        }
     }
 
     xcb_disconnect(connection);
