@@ -1,2 +1,4 @@
 # Xwin-FB
-A graphics framebuffer running in an X-window
+A proof of concept graphics framebuffer inside an X-winodw.
+
+Now featuring an XCB implementation using the X11 shared memory extension.
